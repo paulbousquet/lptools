@@ -1,0 +1,395 @@
+*! version 1.2.0 - Combined Mata function to avoid large st_matrix transfers
+program lpdecomp, eclass 
+    version 15.0
+    syntax anything(equalok) [if] [in], [H(integer 20) H1(integer 0) Lag(integer 0) NWLag(integer 0) vmat(string) contemp(varlist) irfscale(integer 1) adjstd(real 1) ztail(real .05) zerod(varlist) sdep(varlist) CUM NOADJ NOX MULT NODRAW DELAY FORCE DDY DECOMPgraph MAKEScol(integer 1)]
+	
+	foreach var of local sdep {
+		quietly tab `var'
+		if r(r) != 2 {
+			di as error "States must be binary."
+			exit 459
+		}
+	}
+	
+	local fresh result1 irc1 irc2 time makes* makes_date date_rescaled tused*
+	foreach var of local fresh {
+		capture drop `var'
+	}
+	
+	qui tsset
+	local timevar = r(timevar)
+	local tsfmt : format `timevar'
+	
+	preserve
+	
+	local y : word 1 of `anything'
+	local x 
+	local trc 
+	local H = `h'
+	local h1 = `h1'
+	local nlag = `h'
+	
+	local mesh: subinstr local anything "`y'" "", word
+	local ivdum = strpos("`mesh'", "(") 
+	local x : word 1 of `mesh'
+	local contr : subinstr local mesh "`x'" "", word
+	local varlist `contr' `x' `y'
+	
+	local Lag = `lag'
+	local w `contr'
+	local vmat = "`vmat'"
+	
+	if (`Lag' > 0) {
+		if ("`nox'" != "") {
+			local lagvlist `w' `y'
+		}
+		else {
+			if ("`ddy'" != ""){
+				tempvar l_`y' 
+				qui gen l_`y' = L.`y'
+				local lagvlist `w' `x' `l_`y''
+			}
+			else {
+				local lagvlist `varlist'
+			}
+		}
+		if ("`delay'" != ""){
+			local w 
+		}
+		foreach var of local lagvlist {
+			forv i = 1/`Lag' {
+				tempvar t`var'_`i'
+				quietly gen `t`var'_`i'' = L`i'.`var'
+				local w `w' `t`var'_`i''	
+			} 
+		}
+	}
+	
+	local w `w' `contemp'
+	scalar delt = 0 
+	local EV = 1 
+	
+	quietly drop if _n <= `Lag'
+	local T = _N
+	
+	if ("`cum'" != "") {
+		forvalues i=`h1'/`H' {
+			quietly gen temp_`i' = .
+			forvalues j=1/`=`T'-`i'' {
+				quietly sum `y' in `j'/`=`j'+`i''
+				quietly replace temp_`i' = r(sum) / (r(N) == `i'+1) in `j'
+			}
+		}
+	}
+	else {
+		forvalues i=`h1'/`H' {
+			quietly gen temp_`i'= F`i'.`y'
+		}
+	}
+	
+	local shabang `x' `w' 
+	foreach var of local shabang {
+		quietly drop if missing(`var')
+	}
+	
+	local zerod `zerod'
+	foreach var of local zerod {
+		qui capture drop if `var'==0
+	}
+
+	if (`H' == `h1') {
+    	matrix basis = J(1, 1, 1)
+	}
+	else {
+    	quietly generate `h_range' = `h1' + _n - 1 if _n <= `H'+1-`h1'
+    	quietly bspline, xvar(`h_range') power(1) knots(`=`h1''(1)`=`H'') gen(bs)
+    	mkmat bs*, matrix(bs)
+    	matrix basis = bs[1..`=`H'+1-`h1'',1'...]
+    	drop bs*
+	}
+	
+	if ("`w'" != "") {
+		tempname wmat
+		mkmat `w', matrix(`wmat')
+		matrix w = (J(_N, 1, 1) , `wmat')
+	}
+	else {
+		matrix w = J(_N, 1, 1)
+	}
+	
+	local K : word count `w'
+	
+	if (("`w'" != "") & (`ivdum'==0)) {
+		quietly reg `x' `w'
+		scalar delt = e(rmse)
+	}
+	else {
+		if ("`w'" == "") {
+			qui sum `x'
+			scalar delt = r(sd)
+		}
+	}
+	
+	if ("`noadj'" != ""){
+		local delta = 1
+	}
+	else {
+		local delta = `=delt'*`irfscale'
+	}
+	
+	forvalues i=`h1'/`H' {
+		qui reg `x' `w'
+		qui predict temp_x_`i', res 
+		qui reg temp_`i' `w'
+		qui predict temp_y_`i', res 
+	}
+	
+	mkmat `timevar', matrix(tused)
+	mkmat temp_y_*, matrix(yy)
+	mkmat temp_x_*, matrix(x)
+	drop temp_*
+
+	local T = _N
+	local HR = `H' + 1 - `h1'
+	local XS = colsof(basis)*`EV'
+	local back = `T'-`h1'
+	
+	if (`ivdum' > 0){
+		mkmat `trc', matrix(xz)
+	}
+	else {
+		matrix xz = (1,1)
+	}
+	
+	* === Single combined Mata call — no large matrices pass through Stata ===
+	mata: combined_lpdecomp(st_matrix("yy"), st_matrix("x"), st_matrix("basis"), st_matrix("xz"), ///
+		`ivdum', `back', `h1', `H', `HR', `XS', `EV', `K', `T', `delta', `nlag', `ztail', "`vmat'", `adjstd')
+	
+	restore 
+	
+	svmat double results, names(result)
+	svmat double irc, names(irc)
+	svmat double makes, names(makes)
+	svmat double tused, names(tused)
+	
+	gen time = _n - 1
+	
+	qui gen makes_date = tused1 if !missing(makes`makescol')
+	format makes_date `tsfmt'
+	
+	qui sum makes_date if !missing(makes`makescol')
+	local last_main = r(max)
+	local first_main = r(min)
+	
+	local irf_line = `last_main'
+	
+	qui gen date_rescaled = `last_main' + time * 10 if time <= `H'
+	format date_rescaled `tsfmt'
+	
+	qui sum makes`makescol' irc2
+	local y_min = r(min)
+	local y_max = r(max)
+	local y_range = `y_max' - `y_min'
+	local text_y = (`y_max' - result1[1])/2 
+	
+	local first_year = year(dofm(`first_main'))
+	if mod(`first_year', 4) != 0 {
+		local first_year = `first_year' + (4 - mod(`first_year', 4))
+	}
+	local last_year = year(dofm(`last_main'))
+	local xlabs ""
+	forvalues yr = `first_year'(4)`last_year' {
+		local lab_date = tm(`yr'm1)
+		local xlabs "`xlabs' `lab_date'"
+	}
+	
+	local text_x = `irf_line' + 5
+	
+	if ("`nodraw'" == ""){	
+		if ("`decompgraph'" != "") {
+			twoway (line makes`makescol' makes_date if !missing(makes`makescol'), lcolor(blue) lwidth(medthick)) ///
+				   (rarea irc1 irc2 date_rescaled if time<=`H', fcolor(purple%15) lcolor(gs13) lw(none)) ///
+				   (scatter result1 date_rescaled if time<=`H', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick)), ///
+				   xline(`irf_line', lcolor(black) lwidth(medium)) ///
+				   text(`text_y' `text_x' "← IRF Begins", place(e) size(small)) ///
+				   xlabel(`xlabs', format(%tmCY)) xtitle("") yscale(range(. `=`y_max' + `y_range'*0.08')) ///
+				   legend(order(1 "Decomposition" 3 "IRF") position(6) ring(0) cols(1)) ///
+				   title("Decomposition + IRF: `y' response to `x'")
+		}
+		else if ("`mult'" == "") {
+			tw (rarea irc1 irc2 time, fcolor(purple%15) lcolor(gs13) lw(none)) ///
+			   (scatter result1 time, c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
+			   if time<=`H', title("IRF of `y' for shock to `x'") xtitle("horizon")
+		}
+		else {
+			forvalues i=1/`EV' {
+				local xx : word `i' of `endg'
+				local shift = (`H'+1)*(`i'-1)
+				tempvar sc_time 
+				quietly gen `sc_time' = time - `shift'
+				tw (rarea irc1 irc2 `sc_time', fcolor(purple%15) lcolor(gs13) lw(none)) ///
+				   (scatter result1 `sc_time', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
+				   if (`shift'<=time)&(time<=`=`i'*(`H'+1)-1'), title("IRF of `xx' for shock to `xx'") name("`xx'") xtitle(horizon)
+			}
+		}
+	}
+	
+	cap drop tused1
+end
+
+mata: 
+
+void function combined_lpdecomp(
+	real matrix yy,
+	real matrix x,
+	real matrix basis,
+	real matrix xz,
+	real scalar ivdum,
+	real scalar back,
+	real scalar h1,
+	real scalar H,
+	real scalar HR,
+	real scalar XS,
+	real scalar EV,
+	real scalar K,
+	real scalar T,
+	real scalar delta,
+	real scalar nlag,
+	real scalar ztail,
+	string scalar vmat,
+	real scalar adjstd)
+{
+	// ======== TWIRL ========
+	TS = back * HR
+	XSt = XS / EV
+	
+	msc = (TS/HR :- colsum(yy :== .))'
+	sescl = sqrt((msc :- 2) :/ (msc :- (2 + K)))
+	
+	grab = J(back + h1, 1, (1::HR))
+	
+	IDX = J(TS, 2, .)
+	Y = J(TS, 1, .)
+	Xb = J(TS, XS, .)
+	
+	for (t = 1; t <= back; t++) {
+		stt = (t - 1) * HR + 1
+		edd = t * HR
+		IDX[|stt,1 \ edd,2|] = J(HR, 1, t), range(h1, H, 1)
+		Y[|stt,1 \ edd,1|] = yy[|t,1 \ t,HR|]'
+		for (i = 1; i <= EV; i++) {
+			Xb[|stt, idb(i, XSt) \ edd, i * XSt|] = x[t,.]' :* basis
+		}
+	}
+	
+	sel = Y :!= .
+	IDX = select(IDX, sel)
+	Y = select(Y, sel)
+	X = select(Xb, sel)
+	grab = select(grab, sel)
+	TS = length(Y)
+	Xoz = J(1, XS, 1)
+	
+	// Penalty matrix
+	P = J(cols(X), cols(X), 0)
+	D = I(XSt)
+	DD = D' * D
+	P[1::XSt, 1::XSt] = DD
+	for (i = 2; i <= EV; i++) {
+		stt = XSt * (i - 1) + 1
+		edd = XSt * i
+		P[stt::edd, stt::edd] = DD
+	}
+	
+	// ======== IVTWIRL ========
+	if (ivdum > 0) {
+		Xb_iv = J(TS, XS, 0)
+		for (t = 1; t <= back; t++) {
+			idx_beg = (t - 1) * HR + 1
+			idx_end = t * HR
+			stack = basis * xz[t, 1]
+			for (i = 2; i <= EV; i++) {
+				stack = stack, basis * xz[t, i]
+			}
+			Xb_iv[|idx_beg,1 \ idx_end,XS|] = stack
+		}
+		Xb_iv = select(Xb_iv, sel)
+		ZX = Xb_iv, X[1..rows(X), (XS + 1)..cols(X)]
+	}
+	else {
+		ZX = X
+	}
+	
+	// ======== CVTWIRL ========
+	linked = (H + 1) * EV
+	results = J(linked, 1, 0)
+	lambda_opt = 10^(-10)
+	
+	XX = quadcross(X, X)
+	XY = quadcross(X, Y)
+	A = XX + lambda_opt * rows(Y) * P
+	bread = luinv(A)
+	theta = bread * XY
+	thetav = theta
+	
+	beta = theta[1..XS, 1]
+	results[|(h1 + 1),1 \ linked,1|] = basis * beta * delta
+	
+	// Residuals and variance
+	u = Y - ZX * thetav
+	S = X :* (u * J(1, cols(X), 1))
+	V = quadcross(S, S)
+	
+	if (vmat == "nw") {
+		lagseq = 0::nlag
+		weights = 1 :- lagseq :/ (nlag + 1)
+		for (i = 1; i <= nlag; i++) {
+			Gammai = quadcross(S[(i + 1)::rows(S),], S[1::(rows(S) - i),])
+			V = V + weights[i + 1] * (Gammai + Gammai')
+		}
+	}
+	
+	meat = V
+	V = bread * meat * bread
+	V = basis * V[1::XS, 1::XS] * basis'
+	se = sescl :* sqrt(diagonal(V))
+	mu = basis * beta
+	conf = J(rows(se), 2, .)
+	conf[,1] = mu :+ se * invnormal(ztail)
+	conf[,2] = mu :+ se * invnormal(1 - ztail)
+	irc = J(rows(se) + 1, 2, .)
+	irc[(h1 + 1)::linked,] = conf * delta
+	results[|(h1 + 1),1 \ linked,1|] = mu * delta
+	
+	// Decomposition
+	wvec = delta * Xoz * bread * X'
+	plate = wvec'
+	bleak = plate :* Y
+
+	makes = J(rows(yy), cols(yy), .)
+	conv = makes
+	wvec_out = makes
+	for (j = 1; j <= XS; j++) {
+		sp = msc[j,]
+		jsel = grab :== j
+		mike = select(bleak, jsel)
+		jerry = select(plate, jsel)
+		makes[1::sp, j] = runningsum(mike, 0)
+		conv[1::sp, j] = mike
+		wvec_out[1::sp, j] = jerry
+	}
+	
+	// Only store the small output matrices back to Stata
+	st_matrix("results", results)
+	st_matrix("irc", irc)
+	st_matrix("se", se)
+	st_matrix("makes", yy)
+	st_matrix("wvec", wvec_out)
+	st_matrix("conv", conv)
+}
+
+real scalar function idb(idx, blk) {
+	return ((idx - 1) * blk + 1)
+}
+end
+
