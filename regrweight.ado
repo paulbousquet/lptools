@@ -6,16 +6,10 @@ program define regrweight
     version 14.0
     
     gettoken shock features : 0
-	unab features : `features'
+    if ("`features'" != "") {
+    	unab features : `features'
     local k : word count `features'
-    
-	
-    * Check number of features
-    if `k' == 0 {
-        di as error "Error: At least one feature variable must be specified"
-        exit 198
-    }
-	local plotfeat `features'
+    local plotfeat `features'
     if `k' >= 10 {
         di "Only first 9 will be plotted"
 		local k = 9
@@ -27,6 +21,12 @@ program define regrweight
 
     }
 	
+    }
+    else{
+	local k = 1
+	local plotfeat `shock'
+    }
+    
 	
     
     preserve
