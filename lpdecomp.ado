@@ -34,6 +34,17 @@ program lpdecomp, eclass
 	local x : word 1 of `mesh'
 	local contr : subinstr local mesh "`x'" "", word
 	local varlist `contr' `x' `y'
+	local ylab : variable label `y'
+	if `"`ylab'"' == "" {
+		local ylab `y'
+	}
+	local xlab `x'
+	if "`x'" != "" {
+		local xlab : variable label `x'
+		if `"`xlab'"' == "" {
+			local xlab `x'
+		}
+	}
 	
 	local Lag = `lag'
 	local w `contr'
@@ -201,36 +212,51 @@ program lpdecomp, eclass
 	local xlabs ""
 	forvalues yr = `first_year'(4)`last_year' {
 		local lab_date = tm(`yr'm1)
-		local xlabs "`xlabs' `lab_date'"
+		if (`lab_date' < `last_main') {
+			local xlabs `"`xlabs' `lab_date' "`yr'""'
+		}
 	}
+	local xlabs `"`xlabs' `last_main' "0""'
+	local hmid = floor(`H'/2)
+	if (`hmid' > 0 & `hmid' < `H') {
+		local xlabs `"`xlabs' `=`last_main' + 10 * `hmid'' "`hmid'""'
+	}
+	local xlabs `"`xlabs' `=`last_main' + 10 * `H'' "`H'""'
 	
 	local text_x = `irf_line' + 5
 	
 	if ("`nodraw'" == ""){	
 		if ("`decompgraph'" != "") {
-			twoway (line makes`makescol' makes_date if !missing(makes`makescol'), lcolor(blue) lwidth(medthick)) ///
-				   (rarea irc1 irc2 date_rescaled if time<=`H', fcolor(purple%15) lcolor(gs13) lw(none)) ///
+			twoway (line makes`makescol' makes_date if !missing(makes`makescol'), lcolor(gs6) lwidth(medthick)) ///
+				   (rarea irc1 irc2 date_rescaled if time<=`H', fcolor(gs12%40) lcolor(gs10) lw(none)) ///
 				   (scatter result1 date_rescaled if time<=`H', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick)), ///
 				   xline(`irf_line', lcolor(black) lwidth(medium)) ///
-				   text(`text_y' `text_x' "← IRF Begins", place(e) size(small)) ///
-				   xlabel(`xlabs', format(%tmCY)) xtitle("") yscale(range(. `=`y_max' + `y_range'*0.08')) ///
+				   text(`text_y' `text_x' "<- IRF Begins", place(e) size(small)) ///
+				   xlabel(`xlabs', angle(horizontal) labsize(small)) xtitle("") yscale(range(. `=`y_max' + `y_range'*0.08')) ///
+				   graphregion(fcolor(white)) plotregion(fcolor(white)) ///
 				   legend(order(1 "Decomposition" 3 "IRF") position(6) ring(0) cols(1)) ///
-				   title("Decomposition + IRF: `y' response to `x'")
+				   title("Decomposition + IRF: `ylab' response to `xlab'")
 		}
 		else if ("`mult'" == "") {
-			tw (rarea irc1 irc2 time, fcolor(purple%15) lcolor(gs13) lw(none)) ///
+			tw (rarea irc1 irc2 time, fcolor(gs12%40) lcolor(gs10) lw(none)) ///
 			   (scatter result1 time, c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
-			   if time<=`H', title("IRF of `y' for shock to `x'") xtitle("horizon")
+			   if time<=`H', title("IRF of `ylab' for shock to `xlab'") xtitle("horizon") ///
+			   graphregion(fcolor(white)) plotregion(fcolor(white))
 		}
 		else {
 			forvalues i=1/`EV' {
 				local xx : word `i' of `endg'
+				local xxlab : variable label `xx'
+				if `"`xxlab'"' == "" {
+					local xxlab `xx'
+				}
 				local shift = (`H'+1)*(`i'-1)
 				tempvar sc_time 
 				quietly gen `sc_time' = time - `shift'
-				tw (rarea irc1 irc2 `sc_time', fcolor(purple%15) lcolor(gs13) lw(none)) ///
+				tw (rarea irc1 irc2 `sc_time', fcolor(gs12%40) lcolor(gs10) lw(none)) ///
 				   (scatter result1 `sc_time', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
-				   if (`shift'<=time)&(time<=`=`i'*(`H'+1)-1'), title("IRF of `xx' for shock to `xx'") name("`xx'") xtitle(horizon)
+				   if (`shift'<=time)&(time<=`=`i'*(`H'+1)-1'), title("IRF of `xxlab' for shock to `xxlab'") name("`xx'") xtitle(horizon) ///
+				   graphregion(fcolor(white)) plotregion(fcolor(white))
 			}
 		}
 	}
@@ -393,4 +419,5 @@ real scalar function idb(idx, blk) {
 	return ((idx - 1) * blk + 1)
 }
 end
+
 
