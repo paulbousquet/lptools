@@ -7,6 +7,12 @@ This repository is for a Stata package in development to provide useful tools to
 
 The third command, `regreweight.ado`, is straightforward to implement. 
 
+## Dependencies
+
+```
+ssc install moremata; ssc install bspline
+```
+
 ## regrweight
 
 The codes replicate the plot of the weights on [Ramey (2011)](https://www.aeaweb.org/articles?id=10.1257/jel.49.3.673) shown in [Kolesár and Plagborg-Møller (2025)](https://www.mikkelpm.com/files/nonlinear_causal.pdf)
