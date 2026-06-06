@@ -11,7 +11,7 @@ program lpdecomp, eclass
 		}
 	}
 	
-	local fresh result1 irc1 irc2 time makes* makes_date date_rescaled tused*
+	local fresh result1 irc1 irc2 time makes* makes_date date_rescaled tused* midx*
 	foreach var of local fresh {
 		capture drop `var'
 	}
@@ -34,17 +34,6 @@ program lpdecomp, eclass
 	local x : word 1 of `mesh'
 	local contr : subinstr local mesh "`x'" "", word
 	local varlist `contr' `x' `y'
-	local ylab : variable label `y'
-	if `"`ylab'"' == "" {
-		local ylab `y'
-	}
-	local xlab `x'
-	if "`x'" != "" {
-		local xlab : variable label `x'
-		if `"`xlab'"' == "" {
-			local xlab `x'
-		}
-	}
 	
 	local Lag = `lag'
 	local w `contr'
@@ -182,12 +171,18 @@ program lpdecomp, eclass
 	svmat double results, names(result)
 	svmat double irc, names(irc)
 	svmat double makes, names(makes)
+	svmat double makes_idx, names(midx)
 	svmat double tused, names(tused)
-	
+
 	gen time = _n - 1
-	
-	qui gen makes_date = tused1 if !missing(makes`makescol')
+
+	* makes is compressed (per horizon column, observations with a missing projection
+	* window are dropped), so its row order no longer lines up with the calendar. midx
+	* carries each entry's original observation index; map through tused to recover the
+	* true date and keep the decomposition aligned when the sample has gaps.
+	qui gen makes_date = .
 	format makes_date `tsfmt'
+	qui replace makes_date = tused1[midx`makescol'] if !missing(makes`makescol')
 	
 	qui sum makes_date if !missing(makes`makescol')
 	local last_main = r(max)
@@ -212,56 +207,43 @@ program lpdecomp, eclass
 	local xlabs ""
 	forvalues yr = `first_year'(4)`last_year' {
 		local lab_date = tm(`yr'm1)
-		if (`lab_date' < `last_main') {
-			local xlabs `"`xlabs' `lab_date' "`yr'""'
-		}
+		local xlabs "`xlabs' `lab_date'"
 	}
-	local xlabs `"`xlabs' `last_main' "0""'
-	local hmid = floor(`H'/2)
-	if (`hmid' > 0 & `hmid' < `H') {
-		local xlabs `"`xlabs' `=`last_main' + 10 * `hmid'' "`hmid'""'
-	}
-	local xlabs `"`xlabs' `=`last_main' + 10 * `H'' "`H'""'
 	
 	local text_x = `irf_line' + 5
 	
 	if ("`nodraw'" == ""){	
 		if ("`decompgraph'" != "") {
-			twoway (line makes`makescol' makes_date if !missing(makes`makescol'), lcolor(gs6) lwidth(medthick)) ///
-				   (rarea irc1 irc2 date_rescaled if time<=`H', fcolor(gs12%40) lcolor(gs10) lw(none)) ///
+			twoway (line makes`makescol' makes_date if !missing(makes`makescol'), lcolor(blue) lwidth(medthick)) ///
+				   (rarea irc1 irc2 date_rescaled if time<=`H', fcolor(purple%15) lcolor(gs13) lw(none)) ///
 				   (scatter result1 date_rescaled if time<=`H', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick)), ///
 				   xline(`irf_line', lcolor(black) lwidth(medium)) ///
-				   text(`text_y' `text_x' "<- IRF Begins", place(e) size(small)) ///
-				   xlabel(`xlabs', angle(horizontal) labsize(small)) xtitle("") yscale(range(. `=`y_max' + `y_range'*0.08')) ///
-				   graphregion(fcolor(white)) plotregion(fcolor(white)) ///
+				   text(`text_y' `text_x' "← IRF Begins", place(e) size(small)) ///
+				   xlabel(`xlabs', format(%tmCY)) xtitle("") yscale(range(. `=`y_max' + `y_range'*0.08')) ///
 				   legend(order(1 "Decomposition" 3 "IRF") position(6) ring(0) cols(1)) ///
-				   title("Decomposition + IRF: `ylab' response to `xlab'")
+				   title("Change in 1Y-ahead {it:i}{subscript:t} disagreement (1{&sigma} ED4)") ///
+				   subtitle("makescol(`makescol')  —  horizon `=`makescol'-1'")
 		}
 		else if ("`mult'" == "") {
-			tw (rarea irc1 irc2 time, fcolor(gs12%40) lcolor(gs10) lw(none)) ///
+			tw (rarea irc1 irc2 time, fcolor(purple%15) lcolor(gs13) lw(none)) ///
 			   (scatter result1 time, c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
-			   if time<=`H', title("IRF of `ylab' for shock to `xlab'") xtitle("horizon") ///
-			   graphregion(fcolor(white)) plotregion(fcolor(white))
+			   if time<=`H', title("IRF of `y' for shock to `x'") xtitle("horizon")
 		}
 		else {
 			forvalues i=1/`EV' {
 				local xx : word `i' of `endg'
-				local xxlab : variable label `xx'
-				if `"`xxlab'"' == "" {
-					local xxlab `xx'
-				}
 				local shift = (`H'+1)*(`i'-1)
 				tempvar sc_time 
 				quietly gen `sc_time' = time - `shift'
-				tw (rarea irc1 irc2 `sc_time', fcolor(gs12%40) lcolor(gs10) lw(none)) ///
+				tw (rarea irc1 irc2 `sc_time', fcolor(purple%15) lcolor(gs13) lw(none)) ///
 				   (scatter result1 `sc_time', c(l) clp(l) ms(i) clc(black) mc(black) clw(medthick) legend(off)) ///
-				   if (`shift'<=time)&(time<=`=`i'*(`H'+1)-1'), title("IRF of `xxlab' for shock to `xxlab'") name("`xx'") xtitle(horizon) ///
-				   graphregion(fcolor(white)) plotregion(fcolor(white))
+				   if (`shift'<=time)&(time<=`=`i'*(`H'+1)-1'), title("IRF of `xx' for shock to `xx'") name("`xx'") xtitle(horizon)
 			}
 		}
 	}
 	
 	cap drop tused1
+	cap drop midx*
 end
 
 mata: 
@@ -396,14 +378,17 @@ void function combined_lpdecomp(
 	makes = J(rows(yy), cols(yy), .)
 	conv = makes
 	wvec_out = makes
+	makes_idx = makes
 	for (j = 1; j <= XS; j++) {
 		sp = msc[j,]
 		jsel = grab :== j
 		mike = select(bleak, jsel)
 		jerry = select(plate, jsel)
+		idxj = select(IDX[.,1], jsel)
 		makes[1::sp, j] = runningsum(mike, 0)
 		conv[1::sp, j] = mike
 		wvec_out[1::sp, j] = jerry
+		makes_idx[1::sp, j] = idxj
 	}
 	
 	// Only store the small output matrices back to Stata
@@ -413,6 +398,7 @@ void function combined_lpdecomp(
 	st_matrix("makes", makes)
 	st_matrix("wvec", wvec_out)
 	st_matrix("conv", conv)
+	st_matrix("makes_idx", makes_idx)
 }
 
 real scalar function idb(idx, blk) {
